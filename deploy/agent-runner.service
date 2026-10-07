@@ -1,0 +1,25 @@
+[Unit]
+Description=HMS agent-runner (Claude Agent SDK tasks -> GitHub pull requests)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=agent-runner
+Group=agent-runner
+WorkingDirectory=/opt/agent-runner
+EnvironmentFile=/etc/agent-runner/agent-runner.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=10
+# SIGTERM: stop claiming, kill running job containers, report them failed (up to 60s), then exit.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

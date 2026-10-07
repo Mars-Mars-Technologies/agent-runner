@@ -1,0 +1,9 @@
+{
+  "name": "hms-agent-job",
+  "private": true,
+  "type": "module",
+  "description": "Runs inside the job container: installs deps, runs the Claude Agent SDK, writes result + bundle.",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.292"
+  }
+}

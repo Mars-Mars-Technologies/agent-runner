@@ -1,0 +1,5 @@
+node_modules/
+dist/
+job/node_modules/
+.env
+*.pem
