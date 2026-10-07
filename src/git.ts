@@ -119,10 +119,41 @@ export async function inspectBundle(args: { workDir: string, baseSha: string, br
   return { commits: count, descendsFromBase: true, changedFiles, manifests }
 }
 
-/** Push the branch from the runner-owned bare repo (never force). */
-export async function pushBranch(args: { workDir: string, githubRepo: string, branchName: string, token: string, remoteUrl?: string }): Promise<void> {
-  const ref = `refs/heads/${args.branchName}`
-  await execOk('git', ['-C', join(args.workDir, 'push.git'), '-c', 'core.hooksPath=/dev/null', 'push', '--quiet', args.remoteUrl ?? repoUrl(args.githubRepo), `${ref}:${ref}`], {
+const PROTECTED_BRANCHES = new Set(['main', 'master'])
+
+/**
+ * The only refspec the runner may push: refs/heads/claude/task-<id>-<slug>:<same>, without "+" (no force).
+ * Throws a TaskError for anything else: main/master, the task's base branch, another task's branch, refspec tricks.
+ */
+export function pushRefspec(args: { branchName: string, taskId: number, baseBranch: string }): string {
+  const { branchName, taskId, baseBranch } = args
+  const allowed = new RegExp(`^claude/task-${taskId}-[A-Za-z0-9._-]+$`)
+
+  if (!Number.isInteger(taskId) || taskId <= 0 || !allowed.test(branchName) || branchName.includes('..') || branchName.endsWith('.lock'))
+    throw new TaskError(`Refusing to push '${branchName}': only claude/task-${taskId}-* branches may be pushed.`)
+  if (branchName === baseBranch || PROTECTED_BRANCHES.has(branchName))
+    throw new TaskError(`Refusing to push '${branchName}': it is the base branch or a protected branch.`)
+
+  const ref = `refs/heads/${branchName}`
+  const refspec = `${ref}:${ref}`
+  if (refspec.startsWith('+'))
+    throw new TaskError('Refusing to force-push.')
+
+  return refspec
+}
+
+/** Push the task branch from the runner-owned bare repo. Never forces; target ref validated by pushRefspec(). */
+export async function pushBranch(args: {
+  workDir: string
+  githubRepo: string
+  branchName: string
+  taskId: number
+  baseBranch: string
+  token: string
+  remoteUrl?: string
+}): Promise<void> {
+  const refspec = pushRefspec(args)
+  await execOk('git', ['-C', join(args.workDir, 'push.git'), '-c', 'core.hooksPath=/dev/null', 'push', '--quiet', '--no-force-with-lease', args.remoteUrl ?? repoUrl(args.githubRepo), refspec], {
     env: authEnv(args.token),
   })
 }

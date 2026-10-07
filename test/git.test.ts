@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { execOk } from '../src/exec.js'
-import { inspectBundle, prepareRepo, pushBranch, TaskError } from '../src/git.js'
+import { inspectBundle, prepareRepo, pushBranch, pushRefspec, TaskError } from '../src/git.js'
 import { detectGuardrailChanges } from '../src/guardrails.js'
 
 // Real git against local "remotes" (remoteUrl override); no network.
@@ -86,7 +86,7 @@ describe('inspectBundle and pushBranch', () => {
 
     const target = join(root, 'target.git')
     await execOk('git', ['init', '--quiet', '--bare', target])
-    await pushBranch({ workDir, githubRepo: 'org/hms-api', branchName: branch, token: 't', remoteUrl: target })
+    await pushBranch({ workDir, githubRepo: 'org/hms-api', branchName: branch, taskId: 1, baseBranch: 'main', token: 't', remoteUrl: target })
     expect((await execOk('git', ['-C', target, 'rev-list', '--count', branch])).stdout.trim()).toBe('2')
   })
 
@@ -102,5 +102,38 @@ describe('inspectBundle and pushBranch', () => {
     const inspection = await inspectBundle({ workDir, baseSha, branchName: branch })
     expect(inspection.descendsFromBase).toBe(false)
     expect(existsSync(join(workDir, 'push.git'))).toBe(true)
+  })
+})
+
+describe('push target guard', () => {
+  it('refuses to push main, master, the base branch, other tasks\' branches and force/refspec tricks', async () => {
+    const { workDir, repo } = await prepared()
+    await git(repo, 'commit', '--quiet', '--allow-empty', '-m', 'chore: empty')
+    await git(repo, 'bundle', 'create', join(workDir, 'out/branch.bundle'), branch)
+    await inspectBundle({ workDir, baseSha, branchName: branch }) // fills workDir/push.git
+    const target = join(root, 'guarded-target.git')
+    await execOk('git', ['init', '--quiet', '--bare', target])
+
+    const refused: Array<{ branchName: string, baseBranch: string }> = [
+      { branchName: 'main', baseBranch: 'main' },
+      { branchName: 'master', baseBranch: 'main' },
+      { branchName: 'release/1.0', baseBranch: 'release/1.0' }, // the base branch
+      { branchName: 'claude/task-1-add-comment', baseBranch: 'claude/task-1-add-comment' }, // base branch shaped like a task branch
+      { branchName: 'claude/task-2-add-comment', baseBranch: 'main' }, // another task's branch
+      { branchName: 'claude/task-1-', baseBranch: 'main' },
+      { branchName: '+claude/task-1-add-comment', baseBranch: 'main' }, // force refspec
+      { branchName: 'claude/task-1-x:refs/heads/main', baseBranch: 'main' }, // refspec injection
+      { branchName: 'claude/task-1-x/../../main', baseBranch: 'main' },
+    ]
+    for (const { branchName, baseBranch } of refused) {
+      expect(() => pushRefspec({ branchName, taskId: 1, baseBranch }), branchName).toThrow(TaskError)
+      await expect(pushBranch({ workDir, githubRepo: 'org/hms-api', branchName, taskId: 1, baseBranch, token: 't', remoteUrl: target }), branchName)
+        .rejects
+        .toBeInstanceOf(TaskError)
+    }
+
+    // nothing reached the remote; the legitimate task branch is still allowed
+    expect((await execOk('git', ['-C', target, 'for-each-ref'])).stdout.trim()).toBe('')
+    expect(pushRefspec({ branchName: branch, taskId: 1, baseBranch: 'main' })).toBe(`refs/heads/${branch}:refs/heads/${branch}`)
   })
 })

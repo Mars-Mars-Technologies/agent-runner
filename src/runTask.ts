@@ -5,7 +5,7 @@ import type { Config } from './config.js'
 import type { ContainerSpec, RunningContainer } from './docker.js'
 import { formatSdkMessage } from './format.js'
 import type { BundleInspection, PreparedRepo } from './git.js'
-import { TaskError } from './git.js'
+import { pushRefspec, TaskError } from './git.js'
 import type { GitHubPort } from './github.js'
 import { detectGuardrailChanges } from './guardrails.js'
 import { LogStream } from './logs.js'
@@ -33,7 +33,7 @@ export interface RunnerDeps {
   git: {
     prepareRepo: (args: { githubRepo: string, token: string, workDir: string, baseBranch: string, branchName: string }) => Promise<PreparedRepo>
     inspectBundle: (args: { workDir: string, baseSha: string, branchName: string }) => Promise<BundleInspection>
-    pushBranch: (args: { workDir: string, githubRepo: string, branchName: string, token: string }) => Promise<void>
+    pushBranch: (args: { workDir: string, githubRepo: string, branchName: string, taskId: number, baseBranch: string, token: string }) => Promise<void>
   }
   docker: {
     start: (spec: ContainerSpec, onStdout: (line: string) => void, onStderr: (line: string) => void) => RunningContainer
@@ -124,6 +124,8 @@ export async function runTask(claimed: ClaimedTask, deps: RunnerDeps, signal?: A
 
   logs.start()
   try {
+    // Fail fast on a branch we would refuse to push (pushBranch enforces the same rule again).
+    pushRefspec({ branchName: task.branch_name, taskId: task.id, baseBranch: task.base_branch })
     workDir = await mkdtemp(join(config.workDir, `task-${task.id}-`))
     logs.push('runner', `Runner ${config.runnerId} picked up the task. Cloning ${githubRepo} (${task.base_branch}) into a fresh workspace.`)
 
@@ -225,7 +227,7 @@ export async function runTask(claimed: ClaimedTask, deps: RunnerDeps, signal?: A
 
     logs.push('runner', `Pushing ${inspection.commits} commit(s) to ${task.branch_name}.`)
     const writeToken = await deps.github.token(githubRepo, 'write')
-    await deps.git.pushBranch({ workDir, githubRepo, branchName: task.branch_name, token: writeToken })
+    await deps.git.pushBranch({ workDir, githubRepo, branchName: task.branch_name, taskId: task.id, baseBranch: task.base_branch, token: writeToken })
 
     const pr = await deps.github.openPullRequest({
       githubRepo,

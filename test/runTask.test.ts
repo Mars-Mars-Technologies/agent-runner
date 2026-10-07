@@ -247,6 +247,17 @@ describe('runTask', () => {
     expect(deps.api.updateResult).toHaveBeenCalledWith(7, expect.objectContaining({ status: 'failed', error: 'Timed out after 0 minutes.' }))
   })
 
+  it('refuses a task whose branch is not claude/task-<id>-* before cloning anything', async () => {
+    const { deps } = await setup()
+
+    const outcome = await runTask({ ...claimed, task: { ...claimed.task, branch_name: 'main' } }, deps)
+
+    expect(outcome.status).toBe('failed')
+    expect(deps.git.prepareRepo).not.toHaveBeenCalled()
+    expect(deps.git.pushBranch).not.toHaveBeenCalled()
+    expect(vi.mocked(deps.api.updateResult).mock.calls[0]![1].error).toContain('Refusing to push')
+  })
+
   it('reports a missing base branch as a task failure', async () => {
     const { deps } = await setup({ prepareError: new TaskError('Base branch \'develop\' does not exist in org/hms-api') })
 
